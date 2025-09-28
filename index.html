@@ -41,6 +41,7 @@
             background-color: var(--bg-color);
             color: var(--text-light);
             text-align: center;
+            padding-bottom: 150px; /* Space for debug console */
         }
 
         #app {
@@ -136,6 +137,13 @@
         .hidden {
             display: none !important;
         }
+        
+        /* Debug Console Styles */
+        #debug-console { position: fixed; bottom: 0; left: 0; width: 100%; max-height: 150px; background-color: rgba(0, 0, 0, 0.85); border-top: 1px solid #444; font-family: 'Courier New', Courier, monospace; font-size: 12px; z-index: 100; }
+        #debug-header { background-color: #333; color: #fff; padding: 4px 8px; font-weight: bold; }
+        #debug-log-list { list-style: none; padding: 8px; margin: 0; height: 120px; overflow-y: auto; color: #ddd; }
+        #debug-log-list li { padding-bottom: 4px; border-bottom: 1px dotted #555; margin-bottom: 4px; word-wrap: break-word; }
+        #debug-log-list .log-info { color: #fff; } #debug-log-list .log-success { color: #2ecc71; } #debug-log-list .log-error { color: #e74c3c; font-weight: bold; } #debug-log-list .log-warn { color: #f39c12; }
 
     </style>
 </head>
@@ -159,6 +167,11 @@
         </div>
     </div>
     
+    <div id="debug-console">
+        <div id="debug-header">Debug Log</div>
+        <ul id="debug-log-list"></ul>
+    </div>
+    
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -174,6 +187,7 @@
                 videoGrid: document.getElementById('video-grid'),
                 localVideo: document.getElementById('local-video'),
                 localVideoLabel: document.getElementById('local-video-label'),
+                debugLogList: document.getElementById('debug-log-list'),
             };
 
             let db, auth, userId, displayName, localStream;
@@ -184,13 +198,27 @@
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             };
 
+            function logToScreen(message, level = 'info') {
+                if (!ui.debugLogList) return;
+                const li = document.createElement('li');
+                const timestamp = new Date().toLocaleTimeString();
+                li.className = `log-${level}`;
+                let content = `[${timestamp}] ${message}`;
+                li.textContent = content;
+                ui.debugLogList.appendChild(li);
+                ui.debugLogList.scrollTop = ui.debugLogList.scrollHeight;
+            }
+
             try {
+                logToScreen("Initializing Firebase...");
                 const firebaseConfig = JSON.parse(window.__firebase_config);
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
+                logToScreen("Firebase initialized successfully.", "success");
             } catch (error) {
                 console.error("Firebase Init Error:", error);
+                logToScreen(`Firebase Init Error: ${error.message}`, "error");
                 alert("Could not connect to the service.");
             }
             
@@ -201,6 +229,7 @@
                     return;
                 }
                 
+                logToScreen(`User joining as "${displayName}"`);
                 ui.nameEntryContainer.classList.add('hidden');
                 ui.mainContent.classList.remove('hidden');
                 ui.roomTitle.textContent = `Welcome, ${displayName}!`;
@@ -210,10 +239,12 @@
             });
 
             async function signInAndStart() {
+                logToScreen("Signing in anonymously...");
                 await signInAnonymously(auth);
                 onAuthStateChanged(auth, async user => {
                     if (user) {
                         userId = user.uid;
+                        logToScreen(`Signed in with UID: ${userId}`, "success");
                         await startLocalCamera();
                         await joinRoom();
                         listenForOtherUsers();
@@ -222,21 +253,27 @@
             }
             
             async function startLocalCamera() {
+                logToScreen("Requesting camera access...");
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                     ui.localVideo.srcObject = localStream;
+                    logToScreen("Camera access granted.", "success");
                 } catch (error) {
                     console.error("Error accessing camera:", error);
+                    logToScreen(`Camera Error: ${error.message}`, "error");
                     alert("Could not access your camera. Please check permissions.");
                 }
             }
             
             async function joinRoom() {
+                logToScreen("Joining room on Firestore...");
                 const userRef = doc(db, `artifacts/${appId}/public/data/users/${userId}`);
                 await setDoc(userRef, { displayName: displayName, online: true });
+                logToScreen("Room joined.", "success");
             }
             
             function listenForOtherUsers() {
+                logToScreen("Listening for other users...");
                 const usersRef = collection(db, `artifacts/${appId}/public/data/users`);
                 onSnapshot(usersRef, snapshot => {
                     snapshot.docChanges().forEach(async change => {
@@ -246,9 +283,10 @@
                         if (otherUserId === userId) return;
 
                         if (change.type === 'added' && userData.online) {
-                            console.log(`New user found: ${userData.displayName}. Creating offer.`);
+                            logToScreen(`New user found: ${userData.displayName} (${otherUserId}). Creating offer.`);
                             await createOffer(otherUserId);
                         } else if (change.type === 'removed' || !userData.online) {
+                            logToScreen(`User ${userData.displayName} (${otherUserId}) left.`);
                             handleDisconnect(otherUserId);
                         }
                     });
@@ -259,56 +297,49 @@
 
             async function createOffer(otherUserId) {
                 if (peerConnections[otherUserId]) return;
+                logToScreen(`Creating peer connection to ${otherUserId}`);
                 peerConnections[otherUserId] = createPeerConnection(otherUserId);
                 
+                logToScreen(`Creating offer for ${otherUserId}`);
                 const offer = await peerConnections[otherUserId].createOffer();
                 await peerConnections[otherUserId].setLocalDescription(offer);
 
-                const callDoc = {
-                    type: 'offer',
-                    from: userId,
-                    to: otherUserId,
-                    sdp: offer.sdp,
-                };
+                const callDoc = { type: 'offer', from: userId, to: otherUserId, sdp: offer.sdp };
                 await addDoc(collection(db, `artifacts/${appId}/public/data/calls`), callDoc);
+                logToScreen(`Offer sent to ${otherUserId}`, "success");
             }
             
             function createPeerConnection(otherUserId) {
                 const pc = new RTCPeerConnection(configuration);
+                logToScreen(`RTCPeerConnection created for ${otherUserId}`);
 
                 localStream.getTracks().forEach(track => {
                     pc.addTrack(track, localStream);
                 });
+                logToScreen(`Local stream tracks added to PC for ${otherUserId}`);
 
                 pc.onicecandidate = event => {
                     if (event.candidate) {
-                        const candidateDoc = {
-                            type: 'ice-candidate',
-                            from: userId,
-                            to: otherUserId,
-                            candidate: event.candidate.toJSON()
-                        };
+                        logToScreen(`Sending ICE candidate to ${otherUserId}`);
+                        const candidateDoc = { type: 'ice-candidate', from: userId, to: otherUserId, candidate: event.candidate.toJSON() };
                         addDoc(collection(db, `artifacts/${appId}/public/data/calls`), candidateDoc);
                     }
                 };
 
                 pc.ontrack = async event => {
+                    logToScreen(`Track received from ${otherUserId}`, "success");
                     let remoteVideo = document.getElementById(`video-${otherUserId}`);
                     if (!remoteVideo) {
                        const container = document.createElement('div');
                        container.id = `container-${otherUserId}`;
                        container.className = 'video-container';
-                       
                        remoteVideo = document.createElement('video');
                        remoteVideo.id = `video-${otherUserId}`;
-                       remoteVideo.autoplay = true;
-                       remoteVideo.playsInline = true;
-
+                       remoteVideo.autoplay = true; remoteVideo.playsInline = true;
                        const label = document.createElement('div');
                        label.className = 'video-label';
                        const userDoc = await getDoc(doc(db, `artifacts/${appId}/public/data/users/${otherUserId}`));
                        label.textContent = userDoc.data()?.displayName || 'Guest';
-
                        container.appendChild(remoteVideo);
                        container.appendChild(label);
                        ui.videoGrid.appendChild(container);
@@ -320,42 +351,41 @@
             }
 
             function listenForSignaling() {
+                logToScreen("Listening for signaling messages (offers, answers, candidates)...");
                 const q = query(collection(db, `artifacts/${appId}/public/data/calls`), where("to", "==", userId));
                 onSnapshot(q, snapshot => {
                     snapshot.docChanges().forEach(async change => {
                          if (change.type === 'added') {
                             const signal = change.doc.data();
                             const fromId = signal.from;
+                            logToScreen(`Received signal of type "${signal.type}" from ${fromId}`);
+
+                            if (!peerConnections[fromId]) {
+                                logToScreen(`Peer connection for ${fromId} does not exist. Creating one now.`, "warn");
+                                peerConnections[fromId] = createPeerConnection(fromId);
+                            }
 
                             if (signal.type === 'offer') {
-                                console.log(`Received offer from ${fromId}`);
-                                if (!peerConnections[fromId]) {
-                                    peerConnections[fromId] = createPeerConnection(fromId);
-                                }
                                 await peerConnections[fromId].setRemoteDescription(new RTCSessionDescription({type: 'offer', sdp: signal.sdp}));
+                                logToScreen(`Creating answer for ${fromId}`);
                                 const answer = await peerConnections[fromId].createAnswer();
                                 await peerConnections[fromId].setLocalDescription(answer);
 
-                                const answerDoc = {
-                                    type: 'answer',
-                                    from: userId,
-                                    to: fromId,
-                                    sdp: answer.sdp
-                                };
+                                const answerDoc = { type: 'answer', from: userId, to: fromId, sdp: answer.sdp };
                                 await addDoc(collection(db, `artifacts/${appId}/public/data/calls`), answerDoc);
+                                logToScreen(`Answer sent to ${fromId}`, "success");
                             }
                             
                             if (signal.type === 'answer') {
-                                console.log(`Received answer from ${fromId}`);
                                 await peerConnections[fromId]?.setRemoteDescription(new RTCSessionDescription({type: 'answer', sdp: signal.sdp}));
+                                logToScreen(`Set remote description for answer from ${fromId}`);
                             }
                             
                             if (signal.type === 'ice-candidate') {
-                                console.log(`Received ICE candidate from ${fromId}`);
                                 await peerConnections[fromId]?.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                                logToScreen(`Added ICE candidate from ${fromId}`);
                             }
 
-                            // Clean up signal doc
                             await deleteDoc(change.doc.ref);
                          }
                     });
@@ -363,13 +393,13 @@
             }
 
             function handleDisconnect(otherUserId) {
+                logToScreen(`Handling disconnect for ${otherUserId}`, "warn");
                 peerConnections[otherUserId]?.close();
                 delete peerConnections[otherUserId];
                 const videoContainer = document.getElementById(`container-${otherUserId}`);
                 if (videoContainer) {
                     videoContainer.remove();
                 }
-                 console.log(`User ${otherUserId} disconnected.`);
             }
 
             window.onbeforeunload = async () => {
