@@ -111,6 +111,29 @@
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
             aspect-ratio: 16 / 9;
         }
+        
+        .play-button-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            height: 60px;
+            background-color: rgba(0,0,0,0.6);
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 10;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .play-button-overlay svg {
+             width: 50%;
+             height: 50%;
+             fill: white;
+             padding-left: 5px;
+        }
+
 
         video {
             width: 100%;
@@ -144,6 +167,20 @@
         #debug-log-list { list-style: none; padding: 8px; margin: 0; height: 120px; overflow-y: auto; color: #ddd; }
         #debug-log-list li { padding-bottom: 4px; border-bottom: 1px dotted #555; margin-bottom: 4px; word-wrap: break-word; }
         #debug-log-list .log-info { color: #fff; } #debug-log-list .log-success { color: #2ecc71; } #debug-log-list .log-error { color: #e74c3c; font-weight: bold; } #debug-log-list .log-warn { color: #f39c12; }
+
+        /* Mobile Optimizations */
+        @media (max-width: 600px) {
+            #video-grid {
+                grid-template-columns: 1fr; /* Single column layout */
+            }
+            #app {
+                padding: 0.5rem;
+                gap: 1rem;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+        }
 
     </style>
 </head>
@@ -345,6 +382,22 @@
                        ui.videoGrid.appendChild(container);
                     }
                     remoteVideo.srcObject = event.streams[0];
+                    
+                    remoteVideo.play().catch(error => {
+                        logToScreen(`Remote video for ${otherUserId} failed to autoplay: ${error.message}`, "warn");
+                        const container = document.getElementById(`container-${otherUserId}`);
+                        if(container && !container.querySelector('.play-button-overlay')) {
+                            const playButton = document.createElement('div');
+                            playButton.className = 'play-button-overlay';
+                            playButton.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>';
+                            playButton.onclick = () => {
+                                remoteVideo.play();
+                                playButton.remove();
+                            };
+                            container.appendChild(playButton);
+                            logToScreen(`Added a "click to play" button for ${otherUserId}`);
+                        }
+                    });
                 };
 
                 return pc;
